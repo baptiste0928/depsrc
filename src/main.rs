@@ -17,16 +17,18 @@ mod spec;
 mod store;
 
 use std::collections::BTreeSet;
+use std::ffi::OsStr;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{ArgValueCompleter, CompleteEnv, CompletionCandidate};
 
 use crate::checkout::Target;
 use crate::resolve::Pinned;
-use crate::spec::Spec;
+use crate::spec::{Kind, Spec};
 use crate::store::{Db, Pkg, Store};
 
 const ABOUT: &str = "Fetch dependency sources with their git history, for agents to read.";
@@ -49,7 +51,9 @@ When the repository or published commit is unknown, depsrc falls back to the reg
 without history, and says so on stderr. Do not edit fetched sources: they are shared.
 
 The git commit of a registry version is the one its publisher declared: the published archive may
-differ from it.";
+differ from it.
+
+Shell completions: `COMPLETE=<bash|zsh|fish|elvish|powershell> depsrc` prints the shell setup.";
 
 #[derive(Parser)]
 #[command(version, about = ABOUT, long_about = LONG_ABOUT)]
@@ -68,7 +72,7 @@ struct Cli {
 enum Command {
     /// Fetch dependencies and print their source directories, one per line
     Path {
-        #[arg(required = true, value_name = "SPEC")]
+        #[arg(required = true, value_name = "SPEC", add = ArgValueCompleter::new(complete_spec))]
         specs: Vec<Spec>,
         /// Refetch branches, otherwise refreshed once a day
         #[arg(long)]
@@ -84,7 +88,7 @@ enum Command {
     /// Remove sources unused for a while
     Clean {
         /// Remove this dependency only, regardless of --since
-        #[arg(value_name = "SPEC")]
+        #[arg(value_name = "SPEC", add = ArgValueCompleter::new(complete_spec))]
         spec: Option<Spec>,
         /// Unused for this long: 30d, 12h, 0s…
         #[arg(long, default_value = "30d", value_parser = clean::parse_duration)]
@@ -93,6 +97,7 @@ enum Command {
 }
 
 fn main() -> ExitCode {
+    CompleteEnv::with_factory(Cli::command).complete();
     let cli = Cli::parse();
     match run(cli) {
         Ok(code) => code,
@@ -194,4 +199,21 @@ fn record(db: &mut Db, project: PathBuf, requested: &Spec, key: String, pkg: Pkg
 
     db.projects.entry(project).or_default().insert(requested.to_string(), key.clone());
     db.pkgs.insert(key, pkg);
+}
+
+/// Spec kinds, and packages fetched before with and without version.
+/// Reads the store from the environment: completers do not see `--store`.
+fn complete_spec(current: &OsStr) -> Vec<CompletionCandidate> {
+    let current = current.to_string_lossy();
+    let db = Store::locate(None).and_then(|s| s.read()).unwrap_or_default();
+    let unversioned = db.pkgs.keys().filter_map(|k| k.parse::<Spec>().ok()).map(|s| Spec { at: None, ..s }.to_string());
+
+    let candidates: BTreeSet<String> = Kind::ALL
+        .iter()
+        .map(|k| format!("{}:", k.as_str()))
+        .chain(unversioned)
+        .chain(db.pkgs.keys().cloned())
+        .collect();
+
+    candidates.into_iter().filter(|s| s.starts_with(&*current)).map(CompletionCandidate::new).collect()
 }

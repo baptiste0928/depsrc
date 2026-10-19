@@ -77,7 +77,7 @@ impl Tree {
 
 impl Store {
     /// Store at `root`, else `$DEPSRC_STORE`, `$XDG_CACHE_HOME/depsrc` or `~/.cache/depsrc`.
-    fn locate(root: Option<PathBuf>) -> Result<Store> {
+    pub fn locate(root: Option<PathBuf>) -> Result<Store> {
         let root = root.or_else(|| std::env::var_os("DEPSRC_STORE").filter(|v| !v.is_empty()).map(PathBuf::from));
 
         let root = root.or_else(|| match std::env::var_os("XDG_CACHE_HOME").filter(|v| !v.is_empty()) {
