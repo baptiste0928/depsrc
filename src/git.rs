@@ -1,5 +1,6 @@
 //! Thin wrappers over the git CLI.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -83,6 +84,28 @@ pub fn clone(url: &str, dir: &Path) -> Result<()> {
     let dir = dir.to_str().context("non UTF-8 store path")?;
     git(None, &["clone", "-q", "--bare", "--filter=blob:none", "--", url, dir])?;
     Ok(())
+}
+
+/// Tags of the remote repository at `url`, with their commit.
+pub fn remote_tags(url: &str) -> Result<HashMap<String, Commit>> {
+    let out = git(None, &["ls-remote", "--tags", "--", url])?;
+    let mut tags = HashMap::new();
+
+    for (commit, tag) in out.lines().filter_map(|l| l.split_once("\trefs/tags/")) {
+        let Some(commit) = Commit::parse(commit) else { continue };
+
+        // Annotated tags are listed twice, then peeled to their commit with `^{}`.
+        match tag.strip_suffix("^{}") {
+            Some(tag) => {
+                tags.insert(tag.to_string(), commit);
+            }
+            None => {
+                tags.entry(tag.to_string()).or_insert(commit);
+            }
+        }
+    }
+
+    Ok(tags)
 }
 
 /// Fetches `refspecs` from origin.

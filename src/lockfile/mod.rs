@@ -10,6 +10,8 @@ mod npm;
 mod pnpm;
 mod yarn;
 
+pub use cargo::same_crate;
+
 use std::fmt;
 use std::path::{Path, PathBuf};
 

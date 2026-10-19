@@ -49,8 +49,9 @@ pnpm-lock.yaml, package-lock.json, yarn.lock, bun.lock), else the latest release
 #<ref> instead: a git tag, branch or commit of its repository (gh:jj-vcs/jj#v0.30.0, npm:zod#main).
 Without one, gh: and git: specs use the default branch.
 
-When the repository or published commit is unknown, depsrc falls back to the registry archive,
-without history, and says so on stderr. Do not edit fetched sources: they are shared.
+When the registry has no published commit, depsrc guesses it from a release tag (v1.2.3,
+<name>@1.2.3, …), otherwise falls back to the registry archive, without history. Both are noted on
+stderr. Do not edit fetched sources: they are shared.
 
 The git commit of a registry version is the one its publisher declared: the published archive may
 differ from it.
@@ -205,9 +206,14 @@ fn fetch(store: &Store, pinned: Pinned, cached: Option<Target>, refetch: bool) -
 
     let key = spec.to_string();
     let mut errors = Vec::new();
-    for target in targets {
+
+    for mut target in targets {
         match checkout::checkout(store, &target.source, refetch) {
             Ok(tree) => {
+                if target.subdir.is_none() && !target.source.is_archive() {
+                    target.subdir = resolve::package_dir(&store.tree(&tree), &spec);
+                }
+
                 return Ok((key, Pkg { target, tree }, errors));
             }
             Err(e) => errors.push(format!("{e:#}")),

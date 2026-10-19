@@ -53,7 +53,7 @@ pub(super) fn entries(text: &str, name: &str) -> Vec<Entry> {
 }
 
 /// Whether two crate names are the same: crates.io treats `-` and `_` alike.
-fn same_crate(a: &str, b: &str) -> bool {
+pub fn same_crate(a: &str, b: &str) -> bool {
     a.len() == b.len()
         && a.bytes().zip(b.bytes()).all(|(a, b)| a == b || (a, b) == (b'-', b'_') || (a, b) == (b'_', b'-'))
 }
