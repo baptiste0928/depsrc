@@ -7,19 +7,21 @@
 mod archive;
 mod checkout;
 mod git;
+mod lockfile;
 mod registry;
 mod resolve;
 mod spec;
 mod store;
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use crate::checkout::Target;
+use crate::resolve::Pinned;
 use crate::spec::Spec;
 use crate::store::{Pkg, Store};
 
@@ -28,13 +30,15 @@ const ABOUT: &str = "Fetch dependency sources with their git history, for agents
 const LONG_ABOUT: &str = "\
 Fetch dependency sources with their git history, for agents to read.
 
-`depsrc path <spec>` prints the directory of a dependency's source. Read it to learn how the
-dependency works; use `git log` and `git blame` there to understand why. Git checkouts are blobless clones: file contents of old commits are fetched on
+`depsrc path <spec>` prints the directory of a dependency's source, at the version locked by the
+current project. Read it to learn how the dependency works; use `git log` and `git blame` there to
+understand why. Git checkouts are blobless clones: file contents of old commits are fetched on
 demand, so history commands need network.
 
 Specs: crate:serde, npm:@types/node, gh:owner/repo, git:https://host/repo. Registry packages take an
-optional @<version> (crate:serde@1.0.210, npm:zod@next), else use the latest release. Any spec
-takes a #<ref> instead: a git tag, branch or commit of its repository (gh:jj-vcs/jj#v0.30.0, npm:zod#main).
+optional @<version> (crate:serde@1.0.210, npm:zod@next), else use the project lockfile (Cargo.lock,
+pnpm-lock.yaml, package-lock.json, yarn.lock, bun.lock), else the latest release. Any spec takes a
+#<ref> instead: a git tag, branch or commit of its repository (gh:jj-vcs/jj#v0.30.0, npm:zod#main).
 Without one, gh: and git: specs use the default branch.
 
 When the repository or published commit is unknown, depsrc falls back to the registry archive,
@@ -49,6 +53,9 @@ struct Cli {
     /// Store directory [default: $DEPSRC_STORE, else $XDG_CACHE_HOME/depsrc]
     #[arg(short = 'S', long, global = true)]
     store: Option<PathBuf>,
+    /// Run as if started in this directory
+    #[arg(short = 'C', long, global = true)]
+    cwd: Option<PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
@@ -77,6 +84,12 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<ExitCode> {
+    let cwd = match cli.cwd {
+        Some(dir) => dir,
+        None => std::env::current_dir()?,
+    };
+
+    let cwd = cwd.canonicalize().with_context(|| format!("{}", cwd.display()))?;
     let store = Store::open(cli.store)?;
     let mut out = std::io::stdout().lock();
 
@@ -84,7 +97,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Path { specs, refetch } => {
             let mut code = ExitCode::SUCCESS;
             for spec in &specs {
-                match path(&store, spec, refetch) {
+                match path(&store, &cwd, spec, refetch) {
                     Ok(path) => writeln!(out, "{}", path.display())?,
                     Err(e) => {
                         eprintln!("error: {e:#}");
@@ -99,9 +112,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
 }
 
 /// Fetches `spec` and records it.
-fn path(store: &Store, spec: &Spec, refetch: bool) -> Result<PathBuf> {
-    let pinned = resolve::pin(spec)?;
-    let cached = store.read()?.pkgs.remove(&pinned.to_string()).map(|p| p.target);
+fn path(store: &Store, cwd: &Path, spec: &Spec, refetch: bool) -> Result<PathBuf> {
+    let pinned = resolve::pin(spec, cwd)?;
+    let cached = store.read()?.pkgs.remove(&pinned.spec.to_string()).map(|p| p.target);
     let (key, pkg, failures) = fetch(store, pinned, cached, refetch)?;
     store.update(|db| db.pkgs.insert(key.clone(), pkg.clone()))?;
     if pkg.target.source.is_archive() {
@@ -114,10 +127,10 @@ fn path(store: &Store, spec: &Spec, refetch: bool) -> Result<PathBuf> {
 
 /// Checks out the first target of `pinned` that works. Returns its exact spec, and the failures of
 /// better targets.
-fn fetch(store: &Store, pinned: Spec, cached: Option<Target>, refetch: bool) -> Result<(String, Pkg, Vec<String>)> {
-    let (spec, targets) = match cached {
-        Some(target) => (pinned, vec![target]),
-        None => resolve::targets(&pinned)?,
+fn fetch(store: &Store, pinned: Pinned, cached: Option<Target>, refetch: bool) -> Result<(String, Pkg, Vec<String>)> {
+    let (spec, targets) = match cached.or(pinned.target) {
+        Some(target) => (pinned.spec, vec![target]),
+        None => resolve::targets(&pinned.spec)?,
     };
 
     let key = spec.to_string();

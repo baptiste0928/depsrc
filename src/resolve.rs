@@ -1,27 +1,45 @@
 //! Resolves a spec to the targets to try, best first.
 //!
 //! ```text
-//! crate:/npm: ── pin: latest ──> @version ── registry ──> commit, else archive
-//!          └─ #ref ── package repository ──> ref
+//! crate:/npm: ── pin: lockfile, else latest ──> @version ── registry ──> commit, else archive
+//!          └─ #ref ── package repository ──> ref       (a git dependency in Cargo.lock pins its commit)
 //! gh:/git: ── their repository ──> #ref, else default branch
 //! ```
+
+use std::path::Path;
 
 use anyhow::{Result, bail};
 
 use crate::checkout::{Rev, Source, Target, slug};
 use crate::git::Commit;
+use crate::lockfile::{self, Locked};
 use crate::registry;
 use crate::spec::{At, Kind, Spec};
 
-/// Pins a registry spec without version to the latest release.
-pub fn pin(spec: &Spec) -> Result<Spec> {
+/// Spec at its lockfile version, or as given, with its target when the lockfile already gives it.
+pub struct Pinned {
+    pub spec: Spec,
+    pub target: Option<Target>,
+}
+
+/// Pins a registry spec without version to the lockfile's, else to the latest release.
+pub fn pin(spec: &Spec, cwd: &Path) -> Result<Pinned> {
     if spec.at.is_some() || matches!(spec.kind, Kind::Gh | Kind::Git) {
-        return Ok(spec.clone());
+        return Ok(Pinned { spec: spec.clone(), target: None });
     }
-    match registry::package(spec.kind, &spec.name)? {
-        Some(pkg) => Ok(spec.with(At::Version(pkg.latest))),
-        None => bail!("{spec}: not found"),
-    }
+
+    Ok(match lockfile::find(cwd, spec.kind, &spec.name)? {
+        Some(Locked::Version(v)) => Pinned { spec: spec.with(At::Version(v)), target: None },
+        Some(Locked::Foreign(origin)) => bail!("{spec}: locked from {origin}, pass a git: spec instead"),
+        Some(Locked::Git { url, rev }) => Pinned {
+            spec: spec.with(At::Ref(rev.to_string())),
+            target: Some(Target { source: Source::Git { url, rev: Rev::Commit(rev) }, subdir: None }),
+        },
+        None => match registry::package(spec.kind, &spec.name)? {
+            Some(pkg) => Pinned { spec: spec.with(At::Version(pkg.latest)), target: None },
+            None => bail!("{spec}: not found"),
+        },
+    })
 }
 
 /// Targets of a pinned spec, best first, with the spec at the version found: a dist-tag such as
