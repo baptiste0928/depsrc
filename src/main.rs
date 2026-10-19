@@ -2,10 +2,13 @@
 //!
 //! ```text
 //! path: spec ─ resolve ─> targets ─ checkout ─> tree path, recorded in the store
+//! list: store ─ project's specs ─> specs as requested
+//! clean: store ─ unused trees ─> removed, with orphan repos
 //! ```
 
 mod archive;
 mod checkout;
+mod clean;
 mod git;
 mod lockfile;
 mod registry;
@@ -13,6 +16,7 @@ mod resolve;
 mod spec;
 mod store;
 
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -23,7 +27,7 @@ use clap::{Parser, Subcommand};
 use crate::checkout::Target;
 use crate::resolve::Pinned;
 use crate::spec::Spec;
-use crate::store::{Pkg, Store};
+use crate::store::{Db, Pkg, Store};
 
 const ABOUT: &str = "Fetch dependency sources with their git history, for agents to read.";
 
@@ -70,6 +74,22 @@ enum Command {
         #[arg(long)]
         refetch: bool,
     },
+    /// List dependencies fetched from the current project, as requested. `depsrc path $(depsrc list)`
+    /// prints their current directories
+    List {
+        /// List dependencies of all projects
+        #[arg(long)]
+        all: bool,
+    },
+    /// Remove sources unused for a while
+    Clean {
+        /// Remove this dependency only, regardless of --since
+        #[arg(value_name = "SPEC")]
+        spec: Option<Spec>,
+        /// Unused for this long: 30d, 12h, 0s…
+        #[arg(long, default_value = "30d", value_parser = clean::parse_duration)]
+        since: u64,
+    },
 }
 
 fn main() -> ExitCode {
@@ -108,15 +128,34 @@ fn run(cli: Cli) -> Result<ExitCode> {
 
             Ok(code)
         }
+        Command::List { all } => {
+            let db = store.read()?;
+            let project = lockfile::project(&cwd);
+
+            let specs: BTreeSet<&String> =
+                db.projects.iter().filter(|(p, _)| all || **p == project).flat_map(|(_, specs)| specs.keys()).collect();
+
+            for spec in specs {
+                writeln!(out, "{spec}")?;
+            }
+
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Clean { spec, since } => {
+            let (trees, repos) = clean::clean(&store, spec.as_ref(), since)?;
+            writeln!(out, "removed {trees} trees, {repos} repos")?;
+            Ok(ExitCode::SUCCESS)
+        }
     }
 }
 
-/// Fetches `spec` and records it.
+/// Fetches `spec` and records it for the project around `cwd`.
 fn path(store: &Store, cwd: &Path, spec: &Spec, refetch: bool) -> Result<PathBuf> {
     let pinned = resolve::pin(spec, cwd)?;
     let cached = store.read()?.pkgs.remove(&pinned.spec.to_string()).map(|p| p.target);
     let (key, pkg, failures) = fetch(store, pinned, cached, refetch)?;
-    store.update(|db| db.pkgs.insert(key.clone(), pkg.clone()))?;
+    let project = lockfile::project(cwd);
+    store.update(|db| record(db, project, spec, key.clone(), pkg.clone()))?;
     if pkg.target.source.is_archive() {
         let why = if failures.is_empty() { String::new() } else { format!(" ({})", failures.join("; ")) };
         eprintln!("note: {key}: registry archive, no history{why}");
@@ -145,4 +184,14 @@ fn fetch(store: &Store, pinned: Pinned, cached: Option<Target>, refetch: bool) -
     }
 
     anyhow::bail!("{key}: {}", errors.join("; "))
+}
+
+/// Records `pkg` as used by `project`.
+fn record(db: &mut Db, project: PathBuf, requested: &Spec, key: String, pkg: Pkg) {
+    if let Some(tree) = db.trees.get_mut(&pkg.tree) {
+        tree.used = store::now();
+    }
+
+    db.projects.entry(project).or_default().insert(requested.to_string(), key.clone());
+    db.pkgs.insert(key, pkg);
 }

@@ -11,7 +11,7 @@ mod pnpm;
 mod yarn;
 
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
@@ -74,6 +74,12 @@ pub fn find(cwd: &Path, kind: Kind, name: &str) -> Result<Option<Locked>> {
     };
 
     pick(name, &entries)
+}
+
+/// Project owning `cwd`: the closest directory with a lockfile or a repository.
+pub fn project(cwd: &Path) -> PathBuf {
+    let markers = CARGO.iter().chain(NPM).chain(&[".git", ".jj"]);
+    cwd.ancestors().find(|dir| markers.clone().any(|m| dir.join(m).exists())).unwrap_or(cwd).to_path_buf()
 }
 
 /// npm workspace member owning `cwd`, whose own locked versions win over the root ones.

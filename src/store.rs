@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! <store>/
-//!   sources.json                      Db: resolutions and trees
+//!   sources.json                      Db: resolutions, trees, projects
 //!   repos/github.com--serde-rs--serde bare blobless clones
 //!   trees/github.com--serde-rs--serde@89c4b02b
 //!   trees/npm--zod@3.23.8             registry archive, no history
@@ -37,6 +37,9 @@ pub struct Db {
     pub pkgs: BTreeMap<String, Pkg>,
     #[serde(default)]
     pub trees: BTreeMap<String, Tree>,
+    /// Project root → specs as requested from it → exact spec in `pkgs`.
+    #[serde(default)]
+    pub projects: BTreeMap<PathBuf, BTreeMap<String, String>>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -97,6 +100,18 @@ impl Store {
             fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
         }
         Ok(store)
+    }
+
+    /// Bare repos directory names.
+    pub fn repos(&self) -> Result<Vec<String>> {
+        let mut out = Vec::new();
+        for entry in fs::read_dir(self.root.join("repos"))? {
+            let name = entry?.file_name().to_string_lossy().into_owned();
+            if !name.starts_with('.') {
+                out.push(name);
+            }
+        }
+        Ok(out)
     }
 
     /// Bare repo directory.
