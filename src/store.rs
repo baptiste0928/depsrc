@@ -6,7 +6,7 @@
 //!   repos/github.com--serde-rs--serde bare blobless clones
 //!   trees/github.com--serde-rs--serde@89c4b02b
 //!   trees/npm--zod@3.23.8             registry archive, no history
-//!   locks/                            one lock file per repo or tree
+//!   <name>.lock                       held locks: sources, repos and trees in use
 //! ```
 //!
 //! `.tmp-<name>` entries in `repos/` and `trees/` are clones and extractions in progress, renamed
@@ -17,7 +17,8 @@
 
 use std::collections::BTreeMap;
 use std::fs::{self, File};
-use std::path::{Path, PathBuf};
+use std::os::unix::fs::MetadataExt;
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -95,7 +96,7 @@ impl Store {
     /// Located store, created if missing.
     pub fn open(root: Option<PathBuf>) -> Result<Store> {
         let store = Store::locate(root)?;
-        for dir in ["repos", "trees", "locks"] {
+        for dir in ["repos", "trees"] {
             let dir = store.root.join(dir);
             fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
         }
@@ -131,8 +132,8 @@ impl Store {
     }
 
     /// Exclusive lock on `name`, released on drop.
-    pub fn lock(&self, name: &str) -> Result<File> {
-        lock(&self.root.join("locks").join(name))
+    pub fn lock(&self, name: &str) -> Result<Lock> {
+        Lock::acquire(self.root.join(format!("{name}.lock")))
     }
 
     /// Current index, empty if missing.
@@ -147,7 +148,7 @@ impl Store {
 
     /// Applies `f` to the index under an exclusive lock and saves it atomically.
     pub fn update<T>(&self, f: impl FnOnce(&mut Db) -> T) -> Result<T> {
-        let _lock = lock(&self.root.join("sources.lock"))?;
+        let _lock = Lock::acquire(self.root.join("sources.lock"))?;
         let mut db = self.read()?;
         let out = f(&mut db);
 
@@ -164,8 +165,31 @@ pub fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
-fn lock(path: &Path) -> Result<File> {
-    let file = File::create(path).with_context(|| format!("lock {}", path.display()))?;
-    file.lock().with_context(|| format!("lock {}", path.display()))?;
-    Ok(file)
+/// Exclusive lock on a file, removed on release.
+pub struct Lock {
+    path: PathBuf,
+    _file: File,
+}
+
+impl Lock {
+    fn acquire(path: PathBuf) -> Result<Lock> {
+        loop {
+            let file = File::create(&path).with_context(|| format!("lock {}", path.display()))?;
+            file.lock().with_context(|| format!("lock {}", path.display()))?;
+
+            // The previous holder may have removed the file while we waited: lock the new one.
+            let current = fs::metadata(&path).ok();
+            let locked = file.metadata()?;
+            if current.is_some_and(|c| (c.dev(), c.ino()) == (locked.dev(), locked.ino())) {
+                return Ok(Lock { path, _file: file });
+            }
+        }
+    }
+}
+
+impl Drop for Lock {
+    /// Removes the file before `_file` is closed, which releases the lock.
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
 }

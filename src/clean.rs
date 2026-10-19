@@ -29,7 +29,8 @@ pub fn clean(store: &Store, spec: Option<&Spec>, since: u64) -> Result<(usize, u
             Source::Git { url, .. } => store.lock(&repo_name(url))?,
             Source::Archive { .. } => store.lock(name)?,
         };
-        // Unlist it before removal, and only if still doomed: another process may have used it meanwhile.
+
+        // Unlist it before removal, and only if still doomed: `path` serves listed trees without lock.
         let unlisted = store.update(|db| {
             if !doomed(db, name) {
                 return false;

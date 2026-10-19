@@ -21,6 +21,8 @@ use std::ffi::OsStr;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
@@ -121,8 +123,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
     match cli.command {
         Command::Path { specs, refetch } => {
             let mut code = ExitCode::SUCCESS;
-            for spec in &specs {
-                match path(&store, &cwd, spec, refetch) {
+
+            for result in parallel(&specs, |spec| path(&store, &cwd, spec, refetch)) {
+                match result {
                     Ok(path) => writeln!(out, "{}", path.display())?,
                     Err(e) => {
                         eprintln!("error: {e:#}");
@@ -157,10 +160,33 @@ fn run(cli: Cli) -> Result<ExitCode> {
 /// Fetches `spec` and records it for the project around `cwd`.
 fn path(store: &Store, cwd: &Path, spec: &Spec, refetch: bool) -> Result<PathBuf> {
     let pinned = resolve::pin(spec, cwd)?;
-    let cached = store.read()?.pkgs.remove(&pinned.spec.to_string()).map(|p| p.target);
-    let (key, pkg, failures) = fetch(store, pinned, cached, refetch)?;
+    let key = pinned.spec.to_string();
     let project = lockfile::project(cwd);
-    store.update(|db| record(db, project, spec, key.clone(), pkg.clone()))?;
+
+    // Up-to-date tree: served without git nor lock. Checking it and marking it used is one index
+    // transaction, so `clean` cannot remove it in between.
+    let served = store.update(|db| {
+        let pkg = db.pkgs.get(&key).cloned()?;
+        let tree = db.trees.get(&pkg.tree)?;
+
+        if (tree.branch && tree.stale(refetch)) || !store.tree(&pkg.tree).exists() {
+            return None;
+        }
+
+        record(db, project.clone(), spec, key.clone(), pkg.clone());
+        Some(pkg)
+    })?;
+
+    let (key, pkg, failures) = if let Some(pkg) = served {
+        (key, pkg, Vec::new())
+    } else {
+        let cached = store.read()?.pkgs.remove(&key).map(|p| p.target);
+        let (key, pkg, failures) = fetch(store, pinned, cached, refetch)?;
+
+        store.update(|db| record(db, project, spec, key.clone(), pkg.clone()))?;
+        (key, pkg, failures)
+    };
+
     if pkg.target.source.is_archive() {
         let why = if failures.is_empty() { String::new() } else { format!(" ({})", failures.join("; ")) };
         eprintln!("note: {key}: registry archive, no history{why}");
@@ -199,6 +225,29 @@ fn record(db: &mut Db, project: PathBuf, requested: &Spec, key: String, pkg: Pkg
 
     db.projects.entry(project).or_default().insert(requested.to_string(), key.clone());
     db.pkgs.insert(key, pkg);
+}
+
+/// Fetches run at once, mostly waiting on the network.
+const JOBS: usize = 8;
+
+/// Results of `f` on each item, in order, running a few at once.
+fn parallel<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    let next = AtomicUsize::new(0);
+    let results: Vec<Mutex<Option<R>>> = items.iter().map(|_| Mutex::new(None)).collect();
+
+    std::thread::scope(|s| {
+        for _ in 0..JOBS.min(items.len()) {
+            s.spawn(|| {
+                loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(item) = items.get(i) else { break };
+                    *results[i].lock().expect("no panic while held") = Some(f(item));
+                }
+            });
+        }
+    });
+
+    results.into_iter().map(|r| r.into_inner().expect("no panic while held").expect("all items run")).collect()
 }
 
 /// Spec kinds, and packages fetched before with and without version.
