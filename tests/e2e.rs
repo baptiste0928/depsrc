@@ -40,6 +40,7 @@ fn crate_commit_in_monorepo() {
     assert_eq!(git(&path, &["rev-list", "--count", "HEAD"]), "2");
     let repo_dir = env.store.join("repos/git.test--tokio");
     assert_eq!(git(&repo_dir, &["config", "remote.origin.partialclonefilter"]), "blob:none");
+    assert_eq!(env.ok(&["path", "--root", "crate:tokio-util@0.7.0"]), path.strip_suffix("/tokio-util").unwrap());
 
     // Another version: its own tree, sharing the repo.
     let other = env.ok(&["path", "crate:tokio-util@0.8.0"]);
