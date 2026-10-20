@@ -9,6 +9,7 @@ use std::sync::LazyLock;
 
 use anyhow::{Context, Result};
 use serde::de::DeserializeOwned;
+use ureq::tls::{RootCerts, TlsConfig};
 
 use crate::git::Commit;
 use crate::spec::Kind;
@@ -61,6 +62,7 @@ static AGENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
     ureq::Agent::config_builder()
         .http_status_as_error(false)
         .user_agent(concat!("depsrc/", env!("CARGO_PKG_VERSION")))
+        .tls_config(TlsConfig::builder().root_certs(RootCerts::PlatformVerifier).build())
         .build()
         .new_agent()
 });

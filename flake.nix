@@ -29,7 +29,7 @@
             pname = "depsrc";
             version = (pkgs.lib.importTOML ./Cargo.toml).package.version;
             src = self;
-            cargoHash = "sha256-Q3MSM9AArqbf5uYocXLIFDtA1yVePgzk0YHlDPlRhek=";
+            cargoHash = "sha256-8+PnOHxVgxn+QqnJryxU6jqTRbl1hFpD9p0IqeEuIpM=";
 
             nativeBuildInputs = [
               pkgs.makeWrapper
