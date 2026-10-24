@@ -86,6 +86,12 @@ pub fn clone(url: &str, dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Fetches the file contents missing from the history of the commit checked out in `tree`.
+pub fn backfill(tree: &Path) -> Result<()> {
+    git(Some(tree), &["backfill"])?;
+    Ok(())
+}
+
 /// Tags of the remote repository at `url`, with their commit.
 pub fn remote_tags(url: &str) -> Result<HashMap<String, Commit>> {
     let out = git(None, &["ls-remote", "--tags", "--", url])?;

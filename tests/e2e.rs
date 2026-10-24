@@ -47,6 +47,12 @@ fn crate_commit_in_monorepo() {
     assert_eq!(fs::read_to_string(Path::new(&other).join("lib.rs")).unwrap(), "v3");
     assert_eq!(fs::read_to_string(Path::new(&path).join("lib.rs")).unwrap(), "v2");
     assert_eq!(fs::read_dir(env.store.join("repos")).unwrap().count(), 1);
+
+    // Blobs across the history of a tree.
+    let missing = || git(&repo_dir, &["rev-list", "--objects", "--missing=print", &published]).contains('?');
+    assert!(missing());
+    assert_eq!(env.ok(&["path", "--blobs", "crate:tokio-util@0.7.0"]), path);
+    assert!(!missing());
 }
 
 #[test]

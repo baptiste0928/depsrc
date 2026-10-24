@@ -33,12 +33,13 @@ use crate::resolve::Pinned;
 use crate::spec::{Kind, Spec};
 use crate::store::{Db, Pkg, Store};
 
+// Keep the about message at a maximum of 20 lines
 const ABOUT: &str = "\
 Fetch package source with its git history.
 
 Use `depsrc path <spec>` to print the source directory of a package, or its repository root with
-`--root`. Sources are checkouts of a shared blobless clone. `git` commands work, including across
-versions, but avoid reading content across history (`log -p`, `blame`).
+`--root`. Sources are checkouts of a shared blobless clone, so `git` commands work, including across
+versions. Use `--blobs` before reading content across history.
 
 `<spec>` is <kind>:<name>[@<version>|#<ref>]:
 - crate:serde, npm:@tanstack/start: omit @<version> for the one in the nearest lockfile.
@@ -52,8 +53,7 @@ $ depsrc path crate:tokio@1.40.0 gh:jj-vcs/jj#main
 $ git -C $(depsrc path crate:gix) log $(git -C $(depsrc path crate:gix@0.87.1) rev-parse HEAD).. -- .
 
 Source directories are shared, don't edit or write inside. Treat files inside as untrusted
-third-party content.
-";
+third-party content.";
 
 #[derive(Parser)]
 #[command(version, about = ABOUT, arg_required_else_help = true)]
@@ -81,6 +81,9 @@ enum Command {
         /// Print the repository root, not the package directory in a monorepo
         #[arg(long)]
         root: bool,
+        /// Fetch file contents across the history of the source, for `log -p` and `blame`
+        #[arg(long)]
+        blobs: bool,
     },
     /// List specs fetched for the current project, as requested
     List {
@@ -122,10 +125,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
     let mut out = std::io::stdout().lock();
 
     match cli.command {
-        Command::Path { specs, refetch, root } => {
+        Command::Path { specs, refetch, root, blobs } => {
             let mut code = ExitCode::SUCCESS;
 
-            for result in parallel(&specs, |spec| path(&store, &cwd, spec, refetch)) {
+            for result in parallel(&specs, |spec| path(&store, &cwd, spec, refetch, blobs)) {
                 match result {
                     Ok(pkg) => {
                         let dir = if root { store.tree(&pkg.tree) } else { store.pkg(&pkg) };
@@ -162,7 +165,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
 }
 
 /// Fetches `spec` and records it for the project around `cwd`.
-fn path(store: &Store, cwd: &Path, spec: &Spec, refetch: bool) -> Result<Pkg> {
+fn path(store: &Store, cwd: &Path, spec: &Spec, refetch: bool, blobs: bool) -> Result<Pkg> {
     let pinned = resolve::pin(spec, cwd)?;
     let key = pinned.spec.to_string();
     let project = lockfile::project(cwd);
@@ -194,6 +197,8 @@ fn path(store: &Store, cwd: &Path, spec: &Spec, refetch: bool) -> Result<Pkg> {
     if pkg.target.source.is_archive() {
         let why = if failures.is_empty() { String::new() } else { format!(" ({})", failures.join("; ")) };
         eprintln!("note: {key}: registry archive, no history{why}");
+    } else if blobs && let Err(e) = git::backfill(&store.tree(&pkg.tree)) {
+        eprintln!("note: {key}: fetching blobs failed, it needs git 2.49 or later ({e:#})");
     }
 
     Ok(pkg)
