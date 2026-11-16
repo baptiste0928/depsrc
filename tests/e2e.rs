@@ -586,6 +586,14 @@ fn lockfile_mismatch() {
     fs::write(&lock, "lockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    dependencies:\n      zod: 3.23.8},\n").unwrap();
     let (ok, stderr) = run();
     assert!(!ok && stderr.contains("unexpected version `3.23.8},` for zod"), "{stderr}");
+
+    fs::write(&lock, "lockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    dependencies:\n      zod: 3.23.8\n").unwrap();
+    let (ok, stderr) = run();
+    assert!(ok && stderr.contains("depsrc: using npm:zod@3.23.8 (from lockfile)"), "{stderr}");
+
+    fs::write(&lock, "lockfileVersion: '9.0'\n").unwrap();
+    let (ok, stderr) = run();
+    assert!(ok && stderr.contains("depsrc: using npm:zod@3.23.8 (latest)"), "{stderr}");
 }
 
 #[test]
@@ -977,7 +985,10 @@ impl Env {
         let out = self.run_in(cwd, args);
         let path = stdout(&out);
         let stderr = String::from_utf8_lossy(&out.stderr);
-        assert!(stderr.lines().all(|l| l.starts_with("note: ")), "unexpected stderr: {stderr}");
+        assert!(
+            stderr.lines().all(|l| l.starts_with("depsrc: ") && !l.starts_with("depsrc: error")),
+            "unexpected stderr: {stderr}"
+        );
 
         path
     }

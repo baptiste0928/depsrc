@@ -158,7 +158,7 @@ fn git_tree(store: &Store, url: &str, rev: &Rev, refetch: bool) -> Result<String
                     }
                     // Offline: the tree on disk is better than nothing.
                     Err(e) if existing.is_some() && store.tree(&name).exists() => {
-                        eprintln!("note: {url}#{label}: refetch failed, serving the last fetched tree ({e:#})");
+                        eprintln!("depsrc: {url}#{label}: refetch failed, serving the last fetched tree ({e:#})");
                         (commit, true)
                     }
                     Err(e) => return Err(e.context(format!("fetch {label}"))),

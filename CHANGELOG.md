@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Lockfile parsing is more robust against unknown formats.
+- Resolved version is now always printed on stderr.
 
 ## [0.1.0] - 2026-10-25
 

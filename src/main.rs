@@ -108,7 +108,7 @@ fn main() -> ExitCode {
     match run(cli) {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("error: {e:#}");
+            eprintln!("depsrc: error: {e:#}");
             ExitCode::FAILURE
         }
     }
@@ -135,7 +135,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                         writeln!(out, "{}", dir.display())?;
                     }
                     Err(e) => {
-                        eprintln!("error: {e:#}");
+                        eprintln!("depsrc: error: {e:#}");
                         code = ExitCode::FAILURE;
                     }
                 }
@@ -168,6 +168,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
 fn path(store: &Store, cwd: &Path, spec: &Spec, refetch: bool, blobs: bool) -> Result<Pkg> {
     let pinned = resolve::pin(spec, cwd)?;
     let key = pinned.spec.to_string();
+    let origin = pinned.origin;
     let project = lockfile::project(cwd);
 
     // Up-to-date tree: served without git nor lock. Checking it and marking it used is one index
@@ -194,11 +195,14 @@ fn path(store: &Store, cwd: &Path, spec: &Spec, refetch: bool, blobs: bool) -> R
         (key, pkg, failures)
     };
 
+    // Lets the caller notice a version it did not expect.
+    eprintln!("depsrc: using {key}{}", origin.map_or_default(|o| format!(" ({o})")));
+
     if pkg.target.source.is_archive() {
         let why = if failures.is_empty() { String::new() } else { format!(" ({})", failures.join("; ")) };
-        eprintln!("note: {key}: registry archive, no history{why}");
+        eprintln!("depsrc: {key}: registry archive, no history{why}");
     } else if blobs && let Err(e) = git::backfill(&store.tree(&pkg.tree)) {
-        eprintln!("note: {key}: fetching blobs failed, it needs git 2.49 or later ({e:#})");
+        eprintln!("depsrc: {key}: fetching blobs failed, it needs git 2.49 or later ({e:#})");
     }
 
     Ok(pkg)

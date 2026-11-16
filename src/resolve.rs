@@ -21,26 +21,30 @@ use crate::spec::{At, Kind, Spec};
 pub struct Pinned {
     pub spec: Spec,
     pub target: Option<Target>,
+    /// How the version was chosen, unless given.
+    pub origin: Option<&'static str>,
 }
 
 /// Pins a registry spec without version to the lockfile's, else to the latest release.
 pub fn pin(spec: &Spec, cwd: &Path) -> Result<Pinned> {
     if spec.at.is_some() || matches!(spec.kind, Kind::Gh | Kind::Git) {
-        return Ok(Pinned { spec: spec.clone(), target: None });
+        return Ok(Pinned { spec: spec.clone(), target: None, origin: None });
     }
 
-    Ok(match lockfile::find(cwd, spec.kind, &spec.name)? {
-        Some(Locked::Version(v)) => Pinned { spec: spec.with(At::Version(v)), target: None },
+    let (at, target, origin) = match lockfile::find(cwd, spec.kind, &spec.name)? {
+        Some(Locked::Version(v)) => (At::Version(v), None, "from lockfile"),
         Some(Locked::Foreign(origin)) => bail!("{spec}: locked from {origin}, pass a git: spec instead"),
-        Some(Locked::Git { url, rev }) => Pinned {
-            spec: spec.with(At::Ref(rev.to_string())),
-            target: Some(Target { source: Source::Git { url, rev: Rev::Commit(rev) }, subdir: None }),
-        },
+        Some(Locked::Git { url, rev }) => {
+            let target = Target { source: Source::Git { url, rev: Rev::Commit(rev.clone()) }, subdir: None };
+            (At::Ref(rev.to_string()), Some(target), "from lockfile")
+        }
         None => match registry::package(spec.kind, &spec.name)? {
-            Some(pkg) => Pinned { spec: spec.with(At::Version(pkg.latest)), target: None },
+            Some(pkg) => (At::Version(pkg.latest), None, "latest"),
             None => bail!("{spec}: not found"),
         },
-    })
+    };
+
+    Ok(Pinned { spec: spec.with(at), target, origin: Some(origin) })
 }
 
 /// Targets of a pinned spec, best first, with the spec at the version found: a dist-tag such as
@@ -78,12 +82,12 @@ pub fn targets(spec: &Spec) -> Result<(Spec, Vec<Target>)> {
         // No published commit: guess it from a release tag.
         let rev = release.rev.or_else(|| match release_tag(&url, &spec.name, &release.version) {
             Ok(Some((tag, commit))) => {
-                eprintln!("note: {spec}: no published commit, using tag {tag}");
+                eprintln!("depsrc: {spec}: no published commit, using tag {tag}");
                 Some(commit)
             }
             Ok(None) => None,
             Err(e) => {
-                eprintln!("note: {spec}: list tags: {e:#}");
+                eprintln!("depsrc: {spec}: list tags: {e:#}");
                 None
             }
         });
