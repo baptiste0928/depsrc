@@ -30,7 +30,7 @@ There are multiple installation options:
 After it is installed, tell your agent to use it. Add this to your `AGENTS.md` or `CLAUDE.md`:
 
 ```markdown
-Use `depsrc` to read the source of a package, see `depsrc --help`.
+Use `depsrc` to read the source of a package or a repo, see `depsrc --help`.
 ```
 
 ## How it works
