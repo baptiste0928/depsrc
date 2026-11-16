@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Lockfile parsing is more robust against unknown formats.
 - Resolved version is now always printed on stderr.
+- Prebuilt binaries are now released as `.tar.gz` archives.
 
 ## [0.1.0] - 2026-10-25
 

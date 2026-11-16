@@ -18,8 +18,12 @@ $ git -C $(depsrc path npm:vite@8.3.5) log
 `depsrc` runs on Linux and macOS, and needs `git` (2.49+), `tar` and `gzip` in `PATH`.
 There are multiple installation options:
 
-- **Prebuilt binaries** are available from each
-  [GitHub release](https://github.com/baptiste0928/depsrc/releases).
+- **Prebuilt binaries** are attached to each
+  [GitHub release](https://github.com/baptiste0928/depsrc/releases). This installs the latest one
+  for your machine in `~/.local/bin`:
+  ```sh
+  curl -fL "https://github.com/baptiste0928/depsrc/releases/latest/download/depsrc-$(uname -s)-$(uname -m).tar.gz" | tar xz -C ~/.local/bin
+  ```
 - From source with `cargo`: `cargo install --git https://github.com/baptiste0928/depsrc.git --locked`.
 - From source with Nix: `nix profile install github:baptiste0928/depsrc`.
 

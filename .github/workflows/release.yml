@@ -24,6 +24,11 @@ jobs:
             target: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
 
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -38,18 +43,25 @@ jobs:
       - name: Build binary
         env:
           TARGET: ${{ matrix.target }}
-          ASSET: ${{ matrix.asset }}
         run: |
           # cc only finds musl-gcc by itself on x86_64
           if [[ $TARGET == *-musl ]]; then export "CC_${TARGET//-/_}=musl-gcc"; fi
           cargo build --release --locked --target "$TARGET"
-          mv "target/$TARGET/release/depsrc" "$ASSET"
+          mv "target/$TARGET/release/depsrc" .
 
-      - name: Upload binary
+      - name: Attest binary
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: depsrc
+
+      - name: Package binary
+        run: tar -czf "${{ matrix.asset }}.tar.gz" depsrc
+
+      - name: Upload archive
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.asset }}
-          path: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}.tar.gz
           if-no-files-found: error
 
   release:
@@ -58,8 +70,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      id-token: write
-      attestations: write
 
     steps:
       - name: Checkout repository
@@ -79,17 +89,12 @@ jobs:
             exit 1
           fi
 
-      - name: Download binaries
+      - name: Download archives
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: depsrc-*
           path: dist
           merge-multiple: true
-
-      - name: Attest binaries
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
-        with:
-          subject-path: dist/depsrc-*
 
       - name: Create draft release
         env:
