@@ -3,7 +3,9 @@
 
 use std::path::Path;
 
-use super::{Entry, entry, split_version};
+use serde_json::Value;
+
+use super::{DEPS, Entry, entry, split_version};
 
 pub(super) fn entries(text: &str, name: &str, wanted: &[String]) -> Vec<Entry> {
     let mut out = Vec::new();
@@ -26,26 +28,14 @@ pub(super) fn entries(text: &str, name: &str, wanted: &[String]) -> Vec<Entry> {
     out
 }
 
-/// Descriptors of `name` declared by the `package.json` files from `cwd` up to `root`.
+/// Descriptors of `name` declared by the closest `package.json` doing so, from `cwd` up to `root`.
 pub(super) fn wanted(cwd: &Path, root: &Path, name: &str) -> Vec<String> {
-    let mut out = Vec::new();
+    let declared = |dir: &Path| {
+        let pkg: Value = serde_json::from_slice(&std::fs::read(dir.join("package.json")).ok()?).ok()?;
+        let ranges = DEPS.into_iter().filter_map(|deps| pkg[deps][name].as_str());
+        let out: Vec<String> = ranges.flat_map(|r| [format!("{name}@{r}"), format!("{name}@npm:{r}")]).collect();
+        (!out.is_empty()).then_some(out)
+    };
 
-    for dir in cwd.ancestors() {
-        if let Ok(text) = std::fs::read_to_string(dir.join("package.json"))
-            && let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&text)
-        {
-            for deps in ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"] {
-                if let Some(range) = pkg.get(deps).and_then(|d| d.get(name)).and_then(|r| r.as_str()) {
-                    out.push(format!("{name}@{range}"));
-                    out.push(format!("{name}@npm:{range}"));
-                }
-            }
-        }
-
-        if dir == root {
-            break;
-        }
-    }
-
-    out
+    cwd.ancestors().take_while(|dir| dir.starts_with(root)).find_map(declared).unwrap_or_default()
 }

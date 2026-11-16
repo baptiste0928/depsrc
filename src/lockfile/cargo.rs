@@ -1,4 +1,7 @@
-//! `Cargo.lock`: direct dependencies are those of workspace members, which have no `source`.
+//! `Cargo.lock` (up to v4): direct dependencies are those of workspace members, which have no
+//! `source`.
+
+use anyhow::{Result, bail};
 
 use super::{Entry, Locked, unquote};
 use crate::git::Commit;
@@ -14,7 +17,16 @@ struct Package {
     deps: Vec<String>,
 }
 
-pub(super) fn entries(text: &str, name: &str) -> Vec<Entry> {
+pub(super) fn entries(text: &str, name: &str) -> Result<Vec<Entry>> {
+    // Absent before v3.
+    let version = text.lines().take_while(|l| !l.starts_with('[')).find_map(|l| l.strip_prefix("version = "));
+
+    if let Some(version) = version
+        && !matches!(version.trim(), "3" | "4")
+    {
+        bail!("unsupported lockfile version {version}, expected 4 or lower");
+    }
+
     let pkgs = parse(text);
 
     // Members list `name` alone when a single version is locked, `name version` otherwise.
@@ -28,7 +40,8 @@ pub(super) fn entries(text: &str, name: &str) -> Vec<Entry> {
         })
         .collect();
 
-    pkgs.iter()
+    let entries = pkgs
+        .iter()
         .filter(|p| same_crate(&p.name, name))
         .filter_map(|p| {
             let source = p.source.as_deref()?;
@@ -49,7 +62,9 @@ pub(super) fn entries(text: &str, name: &str) -> Vec<Entry> {
             let direct = direct.iter().any(|v| v.is_none_or(|v| v == p.version));
             Some(Entry { locked, direct })
         })
-        .collect()
+        .collect();
+
+    Ok(entries)
 }
 
 /// Whether two crate names are the same: crates.io treats `-` and `_` alike.

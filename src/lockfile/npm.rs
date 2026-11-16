@@ -1,7 +1,7 @@
 //! `package-lock.json` (v2, v3): direct means in the member's `node_modules`, else hoisted to the
 //! root one.
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use serde_json::Value;
 
 use super::{Entry, Locked, Member, entry};
@@ -9,8 +9,9 @@ use super::{Entry, Locked, Member, entry};
 pub(super) fn entries(text: &str, name: &str, member: &Member) -> Result<Vec<Entry>> {
     let lock: Value = serde_json::from_str(text)?;
 
-    let Some(pkgs) = lock.get("packages").and_then(Value::as_object) else {
-        anyhow::bail!("unsupported lockfile version, expected v2 or v3");
+    let version = &lock["lockfileVersion"];
+    let (Some(2 | 3), Some(pkgs)) = (version.as_u64(), lock["packages"].as_object()) else {
+        bail!("unsupported lockfile version {version}, expected 2 or 3");
     };
 
     let top = format!("node_modules/{name}");

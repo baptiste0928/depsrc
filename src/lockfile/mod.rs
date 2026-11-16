@@ -3,6 +3,9 @@
 //! Each parser scans only the entries of the requested package, marking those the project
 //! depends on directly. A single direct version wins over transitive ones; any other conflict is
 //! an error listing the candidates.
+//!
+//! A lockfile is an error rather than a guess when a parser does not know its format version, or
+//! finds a version that does not look like one.
 
 mod bun;
 mod cargo;
@@ -67,13 +70,15 @@ pub fn find(cwd: &Path, kind: Kind, name: &str) -> Result<Option<Locked>> {
 
     let entries = match path.file_name().and_then(|f| f.to_str()) {
         Some("Cargo.lock") => cargo::entries(&text, name),
-        Some("package-lock.json") => {
-            npm::entries(&text, name, &member(cwd, root)).with_context(|| format!("parse {}", path.display()))?
-        }
+        Some("package-lock.json") => npm::entries(&text, name, &member(cwd, root)),
         Some("pnpm-lock.yaml") => pnpm::entries(&text, name, &member(cwd, root)),
-        Some("yarn.lock") => yarn::entries(&text, name, &yarn::wanted(cwd, root, name)),
+        Some("yarn.lock") => Ok(yarn::entries(&text, name, &yarn::wanted(cwd, root, name))),
         _ => bun::entries(&text, name, &member(cwd, root)),
     };
+
+    let entries = entries
+        .and_then(|entries| checked(entries, name))
+        .with_context(|| format!("cannot read {}, pass @<version> to skip it", path.display()))?;
 
     pick(name, &entries)
 }
@@ -83,6 +88,9 @@ pub fn project(cwd: &Path) -> PathBuf {
     let markers = CARGO.iter().chain(NPM).chain(&[".git", ".jj"]);
     cwd.ancestors().find(|dir| markers.clone().any(|m| dir.join(m).exists())).unwrap_or(cwd).to_path_buf()
 }
+
+/// `package.json` fields listing locked dependencies.
+const DEPS: [&str; 3] = ["dependencies", "devDependencies", "optionalDependencies"];
 
 /// npm workspace member owning `cwd`, whose own locked versions win over the root ones.
 struct Member {
@@ -103,6 +111,21 @@ fn member(cwd: &Path, root: &Path) -> Member {
 
     let dir = dir.strip_prefix(root).ok().and_then(Path::to_str).unwrap_or("").to_string();
     Member { dir, name }
+}
+
+/// `entries` if their versions look like ones: a parser misreading a lockfile yields garbage.
+fn checked(entries: Vec<Entry>, name: &str) -> Result<Vec<Entry>> {
+    let valid = |v: &str| v.chars().all(|c| c.is_ascii_alphanumeric() || ".-+".contains(c));
+
+    for entry in &entries {
+        if let Locked::Version(v) = &entry.locked
+            && !valid(v)
+        {
+            bail!("unexpected version `{v}` for {name}");
+        }
+    }
+
+    Ok(entries)
 }
 
 /// Version among `entries`: the only one, else the only direct one.

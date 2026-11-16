@@ -364,6 +364,9 @@ fn npm_lockfiles() {
             "pnpm-lock.yaml",
             "lockfileVersion: '9.0'
 
+overrides:
+  zod: 3.22.0
+
 importers:
 
   .:
@@ -491,6 +494,62 @@ __metadata:
 }
 "#,
         ),
+        (
+            "pnpm-lock.yaml",
+            r#"---
+lockfileVersion: '9.0'
+
+importers:
+
+  .:
+    packageManagerDependencies:
+      pnpm:
+        specifier: 12.21.0
+        version: 12.21.0
+
+packages:
+
+  pnpm@12.21.0:
+    resolution: {integrity: sha512-x}
+
+---
+{
+	"lockfileVersion": "13.0",
+
+	"projects": {
+		".": {
+			"dependencies": {
+				"zod": "3.23.8",
+			},
+			"devDependencies": {
+				"@types/node": {
+					"specifier": "^3.23.0",
+					"version": "3.23.8",
+				},
+			},
+		},
+	},
+
+	"packages": {
+		"@types/node@3.22.0": {
+			"integrity": "sha512-x",
+		},
+
+		"@types/node@3.23.8": {
+			"integrity": "sha512-x",
+		},
+
+		"zod@3.22.0": {
+			"integrity": "sha512-x",
+		},
+
+		"zod@3.23.8": {
+			"integrity": "sha512-x",
+		},
+	},
+}
+"#,
+        ),
     ];
 
     for (i, (file, text)) in lockfiles.iter().enumerate() {
@@ -504,6 +563,29 @@ __metadata:
         assert!(paths[0].ends_with("/trees/npm--zod@3.23.8"), "{file} #{i}: {out}");
         assert!(paths[1].ends_with("/trees/npm--@types--node@3.23.8"), "{file} #{i}: {out}");
     }
+}
+
+#[test]
+fn lockfile_mismatch() {
+    let env = Env::new("lockfile_mismatch");
+    env.npm("zod", "3.23.8", None, None);
+
+    let project = env.dir.join("project");
+    fs::create_dir_all(&project).unwrap();
+    let lock = project.join("pnpm-lock.yaml");
+
+    let run = || {
+        let out = env.run_in(&project, &["path", "npm:zod"]);
+        (out.status.success(), String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+
+    fs::write(&lock, "lockfileVersion: '14.0'\n\nimporters:\n\n  .:\n    dependencies:\n      zod: 3.23.8\n").unwrap();
+    let (ok, stderr) = run();
+    assert!(!ok && stderr.contains("unsupported lockfile version 14.0, expected 6, 9 or 13"), "{stderr}");
+
+    fs::write(&lock, "lockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    dependencies:\n      zod: 3.23.8},\n").unwrap();
+    let (ok, stderr) = run();
+    assert!(!ok && stderr.contains("unexpected version `3.23.8},` for zod"), "{stderr}");
 }
 
 #[test]
@@ -550,14 +632,59 @@ packages:
 ",
         ),
         (
+            "yarn.lock",
+            r#"# yarn lockfile v1
+
+zod@^3.23.0:
+  version "3.23.8"
+
+zod@~3.22.0:
+  version "3.22.0"
+"#,
+        ),
+        (
             "bun.lock",
             r#"{
-  "lockfileVersion": 1,
+  "lockfileVersion": 2,
   "packages": {
     "zod": ["zod@3.23.8", "", {}, "sha512-x"],
 
     "a/zod": ["zod@3.22.0", "", {}, "sha512-x"],
   }
+}
+"#,
+        ),
+        (
+            "pnpm-lock.yaml",
+            r#"{
+	"lockfileVersion": "13.0",
+
+	"projects": {
+		".": {
+			"dependencies": {
+				"zod": {
+					"specifier": "^3.23.0",
+					"version": "3.23.8",
+				},
+			},
+		},
+
+		"packages/a": {
+			"dependencies": {
+				"zod": "3.22.0",
+			},
+		},
+	},
+
+	"packages": {
+		"zod@3.22.0": {
+			"integrity": "sha512-x",
+		},
+
+		"zod@3.23.8": {
+			"integrity": "sha512-x",
+		},
+	},
 }
 "#,
         ),
@@ -568,8 +695,8 @@ packages:
         let member = root.join("packages/a");
         fs::create_dir_all(member.join("src")).unwrap();
         fs::write(root.join(file), text).unwrap();
-        fs::write(root.join("package.json"), r#"{"name": "root"}"#).unwrap();
-        fs::write(member.join("package.json"), r#"{"name": "a"}"#).unwrap();
+        fs::write(root.join("package.json"), r#"{"name": "root", "dependencies": {"zod": "^3.23.0"}}"#).unwrap();
+        fs::write(member.join("package.json"), r#"{"name": "a", "dependencies": {"zod": "~3.22.0"}}"#).unwrap();
 
         // The member's own version, the root's elsewhere.
         assert!(env.ok_in(&member.join("src"), &["path", "npm:zod"]).ends_with("/npm--zod@3.22.0"), "{file}");
